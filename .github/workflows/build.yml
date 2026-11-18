@@ -1,0 +1,90 @@
+name: Build My Card
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Create signing key
+        shell: bash
+        run: |
+          keytool -genkeypair -v -keystore "$RUNNER_TEMP/mycard.jks" \
+            -storepass mycard123 -keypass mycard123 -alias mycard \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=My Card, O=Amrit Bharadwaj, C=IN"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/mycard.jks" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASSWORD=mycard123" >> "$GITHUB_ENV"
+          echo "KEY_ALIAS=mycard" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=mycard123" >> "$GITHUB_ENV"
+
+      - name: Build APK and AAB
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle assembleDebug assembleRelease bundleRelease --stacktrace --no-daemon 2>&1 | tee build.log
+
+      - name: Show build errors
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "## Build failed"
+            echo
+            echo "### Compiler and Gradle errors"
+            echo '```'
+            grep -E "^e: |error:|FAILED|What went wrong|Execution failed|Caused by|Could not" build.log | head -n 80 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^e: " build.log | head -n 30 | while read -r line; do echo "::error::$line"; done || true
+          echo "---- last 80 log lines ----"
+          tail -n 80 build.log
+
+      - name: Upload full build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyCard-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Upload release APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyCard-release-apk
+          path: app/build/outputs/apk/release/*.apk
+
+      - name: Upload release AAB
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyCard-release-aab
+          path: app/build/outputs/bundle/release/*.aab
